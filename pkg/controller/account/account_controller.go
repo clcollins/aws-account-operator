@@ -19,6 +19,7 @@ import (
 	k8serr "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	kubeclientpkg "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -31,6 +32,9 @@ import (
 	awsv1alpha1 "github.com/openshift/aws-account-operator/pkg/apis/aws/v1alpha1"
 	"github.com/openshift/aws-account-operator/pkg/awsclient"
 	totalaccountwatcher "github.com/openshift/aws-account-operator/pkg/totalaccountwatcher"
+
+	apixv1beta1client "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset/typed/apiextensions/v1beta1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 var log = logf.Log.WithName("controller_account")
@@ -69,10 +73,18 @@ func Add(mgr manager.Manager) error {
 	return add(mgr, newReconciler(mgr))
 }
 
+func apibetaclientbuilder(config *rest.Config) *apixv1beta1client.ApiextensionsV1beta1Client {
+	client, _ := apixv1beta1client.NewForConfig(config)
+
+	return client
+
+}
+
 // newReconciler returns a new reconcile.Reconciler
 func newReconciler(mgr manager.Manager) reconcile.Reconciler {
 	return &ReconcileAccount{
 		Client:           mgr.GetClient(),
+		apixClient:       apibetaclientbuilder(mgr.GetConfig()),
 		scheme:           mgr.GetScheme(),
 		awsClientBuilder: awsclient.GetAWSClient,
 	}
@@ -102,6 +114,7 @@ type ReconcileAccount struct {
 	// This client, initialized using mgr.Client() above, is a split client
 	// that reads objects from the cache and writes to the apiserver
 	Client           kubeclientpkg.Client
+	apixClient       *apixv1beta1client.ApiextensionsV1beta1Client
 	scheme           *runtime.Scheme
 	awsClientBuilder func(kubeClient kubeclientpkg.Client, input awsclient.NewAwsClientInput) (awsclient.Client, error)
 }
@@ -111,6 +124,13 @@ type ReconcileAccount struct {
 // The Controller will requeue the Request to be processed again if the returned error is non-nil or
 // Result.Requeue is true, otherwise upon completion it will remove the work from the queue.
 func (r *ReconcileAccount) Reconcile(request reconcile.Request) (reconcile.Result, error) {
+
+	crdsInterface := r.apixClient.CustomResourceDefinitions()
+
+	crd, err := crdsInterface.Get("accounts.aws.managed.openshift.io", metav1.GetOptions{})
+
+	fmt.Print(crd.Spec)
+
 	start := time.Now()
 	reqLogger := log.WithValues("Controller", controllerName, "Request.Namespace", request.Namespace, "Request.Name", request.Name)
 	reqLogger.Info("Reconciling")
@@ -123,7 +143,7 @@ func (r *ReconcileAccount) Reconcile(request reconcile.Request) (reconcile.Resul
 
 	// Fetch the Account instance
 	currentAcctInstance := &awsv1alpha1.Account{}
-	err := r.Client.Get(context.TODO(), request.NamespacedName, currentAcctInstance)
+	err = r.Client.Get(context.TODO(), request.NamespacedName, currentAcctInstance)
 	if err != nil {
 		if k8serr.IsNotFound(err) {
 			return reconcile.Result{}, nil
